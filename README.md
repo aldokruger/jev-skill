@@ -10,6 +10,11 @@ the options you supplied. Input is billed at \$0.042/Mtok, output is free. A who
 five-judgment workflow measured **\$0.000101** — the lever is that you filter,
 route, verify, and select *before* an expensive model ever reads the input.
 
+Full installation and usage guides:
+
+- [Português-BR](docs/INSTALACAO_PT-BR.md)
+- [English](docs/INSTALLATION_EN.md)
+
 ## Install
 
 The installers detect supported skill roots and let you select one or more
