@@ -12,48 +12,59 @@ route, verify, and select *before* an expensive model ever reads the input.
 
 ## Install
 
+The installers detect supported skill roots and let you select one or more
+providers. Detection means the provider's known config/skills directory exists;
+it does not probe whether the provider executable is installed.
+
+Supported providers: `omp`, `claude`, `codex`, `gemini`, `opencode`, and
+`agents` (`~/.agents`). Default is global `omp` only. Use `--list-agents` to
+inspect all roots before installing.
+
 Linux/macOS/WSL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.sh | bash
+./install.sh --list-agents
+./install.sh --agent omp,claude --scope global --mode copy
+./install.sh --scope project --project /path/to/repo --agent omp,agents
+./install.sh --mode symlink --agent omp
 ```
 
-Windows PowerShell (native installer):
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.ps1 | iex
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -ListAgents
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Agent omp,claude -Scope global -Mode copy
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Scope project -Project C:\src\repo -Agent omp,agents
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Mode symlink -Agent omp
 ```
 
-For a pinned release or a local checkout:
+`copy` is the safe default and works with remote repositories. `symlink` is
+for local checkout development only; Windows may require Developer Mode or an
+elevated PowerShell. A symlink keeps the installed skill synchronized with the
+checkout, while copy creates an independent snapshot.
 
-```powershell
-$script = "$env:TEMP\jev-install.ps1"
-irm https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.ps1 -OutFile $script
-powershell -ExecutionPolicy Bypass -File $script -Ref main
-```
+Scopes and resulting roots:
 
-The PowerShell installer uses `git` when available and falls back to the
-GitHub ZIP archive. It installs into `%USERPROFILE%\.omp\agent\skills` by
-default. Override it with `-Destination`; use `-Force` to replace an existing
-installation and `-DryRun` to preview changes.
+| Scope | Provider | Root |
+|---|---|---|
+| global | omp | `~/.omp/agent/skills` |
+| global | claude | `~/.claude/skills` |
+| global | codex | `~/.codex/skills` |
+| global | gemini | `~/.gemini/skills` |
+| global | opencode | `~/.config/opencode/skills` |
+| global | agents | `~/.agents/skills` |
+| project | any | `<project>/.omp/skills`, `.claude/skills`, `.codex/skills`, `.gemini/skills`, `.config/opencode/skills`, or `.agents/skills` |
 
-From a checkout on either platform:
+Use `--all` / `-All` to install in every supported provider root. Use
+`--force` / `-Force` to replace existing copies and `--dry-run` / `-DryRun` to
+preview changes. `--dest` / `-Destination` overrides the generated root and is
+intended for one custom target.
 
-```bash
-./install.sh              # Linux/macOS/WSL
-./install.sh --dry-run
-```
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
-```
-
-Flags: `--from-git` (fetch from GitHub instead of the local checkout), `--ref TAG`
-(pin a tag or branch), `--dest DIR`, `--force`, `--dry-run`, `--help` for Bash;
-`-Repository`, `-Ref`, `-Destination`, `-Force`, `-DryRun`, `-Help` for PowerShell.
-The installers never touch your API key.
+The Bash installer supports `--from-git` and falls back to HTTPS when piped.
+The PowerShell installer uses Git when available and falls back to the GitHub
+ZIP archive. Both installers never touch your API key.
 
 ## API key
 

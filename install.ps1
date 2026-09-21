@@ -2,6 +2,13 @@
 param(
     [string]$Repository = "https://github.com/aldokruger/jev-skill.git",
     [string]$Ref = "main",
+    [string]$Agent = "",
+    [switch]$All,
+    [switch]$ListAgents,
+    [switch]$Interactive,
+    [ValidateSet("global", "project")][string]$Scope = "global",
+    [string]$Project = (Get-Location).Path,
+    [ValidateSet("copy", "symlink")][string]$Mode = "copy",
     [string]$Destination = "",
     [switch]$Force,
     [switch]$DryRun,
@@ -10,114 +17,108 @@ param(
 
 $ErrorActionPreference = "Stop"
 $SkillName = "jev-orchestration"
+$Supported = @("omp", "claude", "codex", "gemini", "opencode", "agents")
 
 function Write-Usage {
-    @"
-Install the jev-orchestration skill into the OMP agent skills directory.
+@"
+Install jev-orchestration for one or more agent providers.
 
   powershell -ExecutionPolicy Bypass -File .\install.ps1
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Repository https://github.com/aldokruger/jev-skill.git
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ref v1.0.0
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Agent omp,claude
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -All
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Scope project -Project .
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Mode symlink
 
 Parameters:
-  -Repository URL  GitHub repository containing jev-orchestration (default: aldokruger/jev-skill)
-  -Ref REF         Branch, tag, or commit (default: main)
-  -Destination DIR Skills root (default: %USERPROFILE%\.omp\agent\skills)
-  -Force            Replace an existing installation
-  -DryRun           Print the plan without changing files
+  -Agent LIST       comma-separated: omp,claude,codex,gemini,opencode,agents
+  -All              select every supported agent
+  -ListAgents       show detected agents and target roots
+  -Interactive      prompt for selection
+  -Scope SCOPE      global (default) or project
+  -Project DIR      project root for project scope
+  -Mode MODE        copy (default) or symlink (local checkout only)
+  -Destination DIR override the generated skills root
+  -Repository URL   repository to fetch when no local checkout exists
+  -Ref REF          branch, tag, or commit
+  -Force             replace existing installations
+  -DryRun            preview changes
 "@
 }
+if ($Help) { Write-Usage; exit 0 }
 
-if ($Help) {
-    Write-Usage
-    exit 0
+function Get-AgentRoot([string]$Name) {
+    if ($Scope -eq "global") {
+        switch ($Name) {
+            "omp" { if ($env:OMP_AGENT_DIR) { return Join-Path $env:OMP_AGENT_DIR "skills" }; return Join-Path $env:USERPROFILE ".omp\agent\skills" }
+            "claude" { return Join-Path $env:USERPROFILE ".claude\skills" }
+            "codex" { return Join-Path $env:USERPROFILE ".codex\skills" }
+            "gemini" { return Join-Path $env:USERPROFILE ".gemini\skills" }
+            "opencode" { return Join-Path $env:USERPROFILE ".config\opencode\skills" }
+            "agents" { return Join-Path $env:USERPROFILE ".agents\skills" }
+        }
+    } else {
+        switch ($Name) {
+            "omp" { return Join-Path $Project ".omp\skills" }
+            "claude" { return Join-Path $Project ".claude\skills" }
+            "codex" { return Join-Path $Project ".codex\skills" }
+            "gemini" { return Join-Path $Project ".gemini\skills" }
+            "opencode" { return Join-Path $Project ".config\opencode\skills" }
+            "agents" { return Join-Path $Project ".agents\skills" }
+        }
+    }
 }
+function Show-Agents {
+    foreach ($Name in $Supported) {
+        $Root = Get-AgentRoot $Name
+        $State = if (Test-Path $Root) { "detectado" } else { "nao detectado (sera criado)" }
+        Write-Output ("{0,-12} {1} [{2}]" -f $Name, $Root, $State)
+    }
+}
+if ($ListAgents) { Show-Agents; exit 0 }
+if ($Scope -eq "project" -and -not (Test-Path $Project)) { throw "projeto inexistente: $Project" }
 
-if ([string]::IsNullOrWhiteSpace($Destination)) {
-    $AgentDir = if ($env:OMP_AGENT_DIR) { $env:OMP_AGENT_DIR } else { Join-Path $env:USERPROFILE ".omp\agent" }
-    $Destination = Join-Path $AgentDir "skills"
-}
-$Target = Join-Path $Destination $SkillName
+$Selected = @()
+if ($All) { $Selected = $Supported }
+elseif ($Agent) { $Selected = $Agent.Split(',') | ForEach-Object { $_.Trim() } }
+elseif ($Interactive) {
+    Show-Agents
+    $Answer = Read-Host "Escolha agentes separados por virgula [omp]"
+    $Selected = if ($Answer) { $Answer.Split(',') | ForEach-Object { $_.Trim() } } else { @("omp") }
+} else { $Selected = @("omp") }
+foreach ($Name in $Selected) { if ($Supported -notcontains $Name) { throw "agente desconhecido: $Name" } }
+if ($Mode -eq "symlink" -and -not $MyInvocation.MyCommand.Path) { throw "-Mode symlink exige checkout local" }
+
+if ($Destination) { $Roots = @($Destination) } else { $Roots = @($Selected | ForEach-Object { Get-AgentRoot $_ }) }
 $TempRoot = $null
-
 try {
     $ScriptDir = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { "" }
     $LocalSource = if ($ScriptDir) { Join-Path $ScriptDir $SkillName } else { "" }
-    $Source = $null
-
-    if ($LocalSource -and (Test-Path (Join-Path $LocalSource "SKILL.md")) -and (Test-Path (Join-Path $LocalSource "scripts\jev.py"))) {
-        $Source = $LocalSource
-        Write-Output "origem     : $Source"
-    } else {
-        $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("jev-skill-" + [guid]::NewGuid().ToString("N"))
-        $CloneDir = Join-Path $TempRoot "repo"
-        New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
-
+    if (Test-Path (Join-Path $LocalSource "SKILL.md")) { $Source = $LocalSource }
+    else {
+        $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("jev-skill-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Force $TempRoot | Out-Null
         $Git = Get-Command git -ErrorAction SilentlyContinue
         if ($Git) {
             Write-Output "clonando $Repository (ref $Ref)"
-            if (-not $DryRun) {
-                & $Git.Source clone --quiet --depth 1 --branch $Ref $Repository $CloneDir
-                if ($LASTEXITCODE -ne 0) { throw "falha no clone de $Repository (ref $Ref)" }
-            }
-            $Source = Join-Path $CloneDir $SkillName
+            if (-not $DryRun) { & $Git.Source clone --quiet --depth 1 --branch $Ref $Repository (Join-Path $TempRoot "repo"); if ($LASTEXITCODE -ne 0) { throw "falha no clone" } }
+            $Source = Join-Path $TempRoot "repo\$SkillName"
         } else {
-            $RepoBase = $Repository -replace '\.git$',''
-            $ArchiveUrl = "$RepoBase/archive/refs/heads/$Ref.zip"
-            $Archive = Join-Path $TempRoot "repo.zip"
-            Write-Output "baixando $ArchiveUrl"
-            if (-not $DryRun) {
-                Invoke-WebRequest -UseBasicParsing -Uri $ArchiveUrl -OutFile $Archive
-                Expand-Archive -LiteralPath $Archive -DestinationPath $TempRoot -Force
-                $Extracted = Get-ChildItem -LiteralPath $TempRoot -Directory | Where-Object { $_.Name -ne "repo" } | Select-Object -First 1
-                if (-not $Extracted) { throw "arquivo GitHub sem diretorio raiz" }
-                $Source = Join-Path $Extracted.FullName $SkillName
-            }
+            $Archive = Join-Path $TempRoot "repo.zip"; $Url = ($Repository -replace '\.git$','') + "/archive/refs/heads/$Ref.zip"
+            Write-Output "baixando $Url"
+            if (-not $DryRun) { Invoke-WebRequest -UseBasicParsing $Url -OutFile $Archive; Expand-Archive $Archive $TempRoot -Force; $Root = Get-ChildItem $TempRoot -Directory | Where-Object Name -ne repo | Select-Object -First 1; $Source = Join-Path $Root.FullName $SkillName }
         }
     }
-
-    Write-Output "skill      : $SkillName"
-    Write-Output "destino    : $Target"
-
-    if ($DryRun) {
-        if (Test-Path $Target) { Write-Output "  [dry-run] $Target existe: a copia real exigiria -Force" }
-        Write-Output "  [dry-run] copiar SKILL.md e scripts\jev.py"
-        exit 0
+    foreach ($Root in $Roots) {
+        $Target = Join-Path $Root $SkillName
+        Write-Output "destino: $Target (mode=$Mode, scope=$Scope)"
+        if ($DryRun) { Write-Output "  [dry-run] instalar"; continue }
+        if ((Test-Path $Target) -and -not $Force) { throw "$Target ja existe. Use -Force." }
+        if (-not (Test-Path (Join-Path $Source "SKILL.md"))) { throw "SKILL.md nao encontrado em $Source" }
+        New-Item -ItemType Directory -Force $Root | Out-Null
+        if ($Mode -eq "symlink") { if (-not $ScriptDir) { throw "symlink exige checkout local" }; if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }; New-Item -ItemType SymbolicLink -Path $Target -Target $Source | Out-Null }
+        else { $Stage = Join-Path $Root ("." + $SkillName + ".tmp-" + [guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Force (Join-Path $Stage "scripts") | Out-Null; Copy-Item (Join-Path $Source "SKILL.md") (Join-Path $Stage "SKILL.md"); Copy-Item (Join-Path $Source "scripts\jev.py") (Join-Path $Stage "scripts\jev.py"); if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }; Move-Item $Stage $Target }
+        Write-Output "instalado: $Target"
     }
-
-    if (-not (Test-Path (Join-Path $Source "SKILL.md"))) { throw "SKILL.md nao encontrado em $Source" }
-    if (-not (Test-Path (Join-Path $Source "scripts\jev.py"))) { throw "scripts\jev.py nao encontrado em $Source" }
-    if ((Test-Path $Target) -and (-not $Force)) { throw "$Target ja existe. Use -Force para substituir." }
-
-    $Stage = Join-Path $Destination ("." + $SkillName + ".tmp-" + [guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Force -Path (Join-Path $Stage "scripts") | Out-Null
-    Copy-Item -LiteralPath (Join-Path $Source "SKILL.md") -Destination (Join-Path $Stage "SKILL.md")
-    Copy-Item -LiteralPath (Join-Path $Source "scripts\jev.py") -Destination (Join-Path $Stage "scripts\jev.py")
-    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    if (Test-Path $Target) { Remove-Item -LiteralPath $Target -Recurse -Force }
-    Move-Item -LiteralPath $Stage -Destination $Target
-
-    Write-Output "instalado  : $Target"
-    Get-ChildItem -LiteralPath $Target -Recurse -File | ForEach-Object {
-        Write-Output ("  {0} {1} bytes" -f $_.FullName, $_.Length)
-    }
-
-    $Python = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $Python) { $Python = Get-Command py -ErrorAction SilentlyContinue }
-    if ($env:TYPESAFE_API_KEY -and $Python) {
-        Write-Output "verificacao : selftest Jev"
-        if ($Python.Name -eq "py.exe") { & $Python.Source -3 (Join-Path $Target "scripts\jev.py") selftest } else { & $Python.Source (Join-Path $Target "scripts\jev.py") selftest }
-        if ($LASTEXITCODE -ne 0) { throw "selftest Jev falhou" }
-    } elseif (-not $env:TYPESAFE_API_KEY) {
-        Write-Output "verificacao : TYPESAFE_API_KEY ausente; selftest nao rodado"
-        Write-Output "  No OMP, rode /login typesafe e confirme em uma nova sessao."
-    } else {
-        Write-Output "verificacao : Python nao encontrado; instale Python 3 para rodar o selftest"
-    }
-
-    Write-Output "A skill e descoberta no start do OMP; reinicie a sessao e confirme com read skill://$SkillName"
-} finally {
-    if ($TempRoot -and (Test-Path $TempRoot)) { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue }
-}
+    if ($DryRun) { Write-Output "dry-run: nada foi alterado"; exit 0 }
+    Write-Output "TYPESAFE_API_KEY ausente ou selftest omitido; rode /login typesafe no OMP."
+    Write-Output "Reinicie o OMP e confirme com read skill://$SkillName"
+} finally { if ($TempRoot -and (Test-Path $TempRoot)) { Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue } }
