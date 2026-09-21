@@ -54,6 +54,8 @@ cleanup() { [ -z "$TMP" ] || rm -rf "$TMP"; return 0; }
 trap cleanup EXIT
 
 # --- locate the source ------------------------------------------------------
+RAW_BASE="https://raw.githubusercontent.com/aldokruger/jev-skill/${REF:-main}"
+
 if [ "$FROM_GIT" = "1" ]; then
   command -v git >/dev/null 2>&1 || die "git nao encontrado (necessario para --from-git)"
   TMP="$(mktemp -d)"
@@ -66,8 +68,31 @@ if [ "$FROM_GIT" = "1" ]; then
   fi
   SRC="$TMP/repo/$SKILL_NAME"
 else
-  # Running from a checkout: resolve this script's directory without readlink -f.
-  SRC="$(cd "$(dirname "$0")" && pwd)/$SKILL_NAME"
+  SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+  if [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/$SKILL_NAME/SKILL.md" ]; then
+    # Running from a checkout.
+    SRC="$SELF_DIR/$SKILL_NAME"
+  elif [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/SKILL.md" ]; then
+    # Running from inside the skill directory itself.
+    SRC="$SELF_DIR"
+  else
+    # Piped into bash (`curl ... | bash`): there is no local checkout, so fetch
+    # the two files straight from GitHub over HTTPS - no git, no clone.
+    command -v curl >/dev/null 2>&1 || die "sem checkout local e sem curl: use --from-git ou clone o repositorio"
+    TMP="$(mktemp -d)"
+    SRC="$TMP/$SKILL_NAME"
+    say "sem checkout local: baixando de $RAW_BASE"
+    if [ "$DRY_RUN" = "1" ]; then
+      say "  [dry-run] curl -fsSL $RAW_BASE/jev-orchestration/SKILL.md"
+      say "  [dry-run] curl -fsSL $RAW_BASE/jev-orchestration/scripts/jev.py"
+    else
+      mkdir -p "$SRC/scripts"
+      curl -fsSL "$RAW_BASE/$SKILL_NAME/SKILL.md" -o "$SRC/SKILL.md" \
+        || die "falha ao baixar SKILL.md de $RAW_BASE"
+      curl -fsSL "$RAW_BASE/$SKILL_NAME/scripts/jev.py" -o "$SRC/scripts/jev.py" \
+        || die "falha ao baixar scripts/jev.py de $RAW_BASE"
+    fi
+  fi
 fi
 
 DEST="${DEST:-$DEFAULT_DEST}"
