@@ -12,24 +12,48 @@ route, verify, and select *before* an expensive model ever reads the input.
 
 ## Install
 
+Linux/macOS/WSL:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.sh | bash
 ```
 
-or from a checkout:
+Windows PowerShell (native installer):
+
+```powershell
+irm https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.ps1 | iex
+```
+
+For a pinned release or a local checkout:
+
+```powershell
+$script = "$env:TEMP\jev-install.ps1"
+irm https://raw.githubusercontent.com/aldokruger/jev-skill/main/install.ps1 -OutFile $script
+powershell -ExecutionPolicy Bypass -File $script -Ref main
+```
+
+The PowerShell installer uses `git` when available and falls back to the
+GitHub ZIP archive. It installs into `%USERPROFILE%\.omp\agent\skills` by
+default. Override it with `-Destination`; use `-Force` to replace an existing
+installation and `-DryRun` to preview changes.
+
+From a checkout on either platform:
 
 ```bash
-git clone https://github.com/aldokruger/jev-skill.git
-cd jev-skill
-./install.sh              # into ~/.omp/agent/skills
-./install.sh --dry-run    # show the plan, change nothing
-./install.sh --dest DIR   # somewhere else
-./install.sh --force      # replace an existing install
+./install.sh              # Linux/macOS/WSL
+./install.sh --dry-run
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
 ```
 
 Flags: `--from-git` (fetch from GitHub instead of the local checkout), `--ref TAG`
-(pin a tag or branch), `--dest DIR`, `--force`, `--dry-run`, `--help`.
-The installer never touches your API key.
+(pin a tag or branch), `--dest DIR`, `--force`, `--dry-run`, `--help` for Bash;
+`-Repository`, `-Ref`, `-Destination`, `-Force`, `-DryRun`, `-Help` for PowerShell.
+The installers never touch your API key.
 
 ## API key
 
